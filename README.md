@@ -32,13 +32,8 @@ Fiber 引入了几个新的概念，仅通过查看代码是很难理解的。�
 
 ### 什么是 reconciliation?
 
-<dl>
-  <dt>reconciliation</dt>
-  <dd>该算法利用对比两个树之间的不同来确定哪些部分需要更改</dd>
-
-  <dt>update</dt>
-  <dd>用于呈现 React 应用程序的数据变化。通常是“setState”导致最终的重新渲染。</dd>
-</dl>
+- reconciliation：该算法利用对比两个树之间的不同来确定哪些部分需要更改
+- update：用于呈现 React 应用程序的数据变化。通常是“setState”导致最终的重新渲染。
 
 React API的核心思想是，认为是更新导致的整个应用程序重新渲染。这允许开发人员声明式地推理，而不用担心如何有效地将应用程序从任何特定状态转换到另一种状态(A到B, B到C, C到A，等等)。
 
@@ -65,36 +60,30 @@ Fiber 重新实现了协调。它主要与渲染无关，尽管渲染器需要�
 
 ### Scheduling
 
-<dl>
-  <dt>scheduling</dt>
-  <dd>决定何时执行 work 的过程。</dd>
+**scheduling**
+决定何时执行 work 的过程。
 
-  <dt>work</dt>
-  <dd>必须执行的计算。Work 通常是更新的结果(例如<code>setState)(e.g. <code>setState</code>).
-  
-</dl>
+**work**
+必须执行的计算。Work 通常是更新的结果(例如setState)
 
-React's [Design Principles](https://facebook.github.io/react/contributing/design-principles.html#scheduling) document is so good on this subject that I'll just quote it here:
-
-> In its current implementation React walks the tree recursively and calls render functions of the whole updated tree during a single tick. However in the future it might start delaying some updates to avoid dropping frames.
+React的[设计原则](https://facebook.github.io/react/contributing/design-principles.html#scheduling)文档在这个主题上非常适合，我在这里引用一下：
+> 在当前的实现中，React 递归地遍历树，并在单个 tick 中调用整个更新后的树的 render 函数。但是将来可能会开始延迟一些更新，以避免丢帧。
 >
-> This is a common theme in React design. Some popular libraries implement the "push" approach where computations are performed when the new data is available. React, however, sticks to the "pull" approach where computations can be delayed until necessary.
+> 这是React设计中的常见主题。一些流行的库实现了`push` 方法，该方法在有新数据可用时执行计算。但是，React坚持使用 `pull` 方法，在这种方法中，可以将计算延迟到必要的时候。
 >
-> React is not a generic data processing library. It is a library for building user interfaces. We think that it is uniquely positioned in an app to know which computations are relevant right now and which are not.
+> React不是通用的数据处理库。它是用于构建用户界面的库。我们认为，它唯一地位是在应用程序中，了解哪些计算现在相关，哪些不相关。
 >
-> If something is offscreen, we can delay any logic related to it. If data is arriving faster than the frame rate, we can coalesce and batch updates. We can prioritize work coming from user interactions (such as an animation caused by a button click) over less important background work (such as rendering new content just loaded from the network) to avoid dropping frames.
+> 如果 offscreen 有事件，我们可以延迟与此有关的任何逻辑。如果数据到达速度快于帧速率，我们可以合并和批量更新。我们可以将用户交互（例如，由按钮单击引起的动画）的工作优先于次要的后台工作（例如，渲染刚从网络加载的新内容），以避免丢帧。
 
-The key points are:
+关键点是：
 
-- In a UI, it's not necessary for every update to be applied immediately; in fact, doing so can be wasteful, causing frames to drop and degrading the user experience.
-- Different types of updates have different priorities — an animation update needs to complete more quickly than, say, an update from a data store.
-- A push-based approach requires the app (you, the programmer) to decide how to schedule work. A pull-based approach allows the framework (React) to be smart and make those decisions for you.
+- 在用户界面中，不必立即应用每个更新。实际上，这样做可能会浪费，导致帧下降并降低用户体验。
+- 不同类型的更新具有不同的优先级-动画更新需要比数据存储中的更新更快。
+- 基于 push 的方法要求应用程序（您，开发者）决定如何安排工作。基于 pull 的方法使框架（React）变得智能，并为您做出那些决定。
 
-React doesn't currently take advantage of scheduling in a significant way; an update results in the entire subtree being re-rendered immediately. Overhauling React's core algorithm to take advantage of scheduling is the driving idea behind Fiber.
+目前，React 并未充分利用调度的优势。更新导致立即重新渲染整个子树。彻底革新 React 的核心算法以利用调度是 Fiber 背后的驱动思想。
 
----
-
-Now we're ready to dive into Fiber's implementation. The next section is more technical than what we've discussed so far. Please make sure you're comfortable with the previous material before moving on.
+现在，我们准备深入研究 Fiber 的实现。下一节比到目前为止我们讨论的内容更具技术性。在继续之前，请确保您能适应上面的进度。
 
 ## 什么是 fiber?
 
@@ -102,7 +91,6 @@ Now we're ready to dive into Fiber's implementation. The next section is more te
 
 我们开始吧！
 
----
 我们已经确定，Fiber 的一个主要目标是使 React 能够利用调度优势。具体来说，我们需要能够：
 
 - 暂停 Work，稍后再返回。
@@ -138,7 +126,7 @@ v = f(d)
 
 ### Fiber 的结构
 
-*注:随着我们对实现细节的了解越来越详细，一些事情会发生变化的可能性也会增加。如发现任何错误或资料已过时，请提交申请*
+注:随着我们对实现细节的了解越来越详细，一些事情会发生变化的可能性也会增加。如发现任何错误或资料已过时，请提交申请
 
 具体地说，光纤是一个JavaScript对象，它包含关于组件、输入和输出的信息。
 
@@ -183,22 +171,20 @@ child fiber 形成一个单链列表，其头是第一个子链。因此，在�
 
 return fiber 是程序在处理完当前 fiber 之后应返回的 fiber。从概念上讲，它与堆栈帧的返回地址相同。也可以将其视为 parent fiber。
 
-If a fiber has multiple child fibers, each child fiber's return fiber is the parent. So in our example in the previous section, the return fiber of `Child1` and `Child2` is `Parent`.
-
 如果 fiber 具有多个 child fiber，则每个 child fiber 的 return fiber 都是 parent fiber。因此，在上一节的示例中，`Child1`和`Child2`的 return fiber 为`Parent`。
 
 #### `pendingProps` and `memoizedProps`
 
-Conceptually, props are the arguments of a function. A fiber's `pendingProps` are set at the beginning of its execution, and `memoizedProps` are set at the end.
+通俗来讲，props 是函数的参数。在执行开始时设置 fiber 的`pendingProps`，并在执行结束时设置`memoizedProps`。
 
-When the incoming `pendingProps` are equal to `memoizedProps`, it signals that the fiber's previous output can be reused, preventing unnecessary work.
+当传入的`pendingProps`等于`memoizedProps`时，它表示可以重新使用 fiber 的先前输出，从而避免了不必要的工作。
 
 #### `pendingWorkPriority`
+一个数字，指示 fiber 代表的工作优先级。
 
-A number indicating the priority of the work represented by the fiber. The [ReactPriorityLevel](https://github.com/facebook/react/blob/master/src/renderers/shared/fiber/ReactPriorityLevel.js) module lists the different priority levels and what they represent.
+[ReactPriorityLevel](https://github.com/facebook/react/blob/master/src/renderers/shared/fiber/ReactPriorityLevel.js)模块列出了不同的优先级及其代表的内容。
 
-With the exception of `NoWork`, which is 0, a larger number indicates a lower priority. For example, you could use the following function to check if a fiber's priority is at least as high as the given level:
-
+除`NoWork`为 0 外，数字越大表示优先级越低。例如，您可以使用以下功能来检查 fiber 的优先级是否至少与给定级别一样高：
 ```js
 function matchesPriority(fiber, priority) {
   return fiber.pendingWorkPriority !== 0 &&
@@ -206,51 +192,44 @@ function matchesPriority(fiber, priority) {
 }
 ```
 
-*This function is for illustration only; it's not actually part of the React Fiber codebase.*
+注：此功能仅用于说明；它实际上不是React Fiber代码库的一部分。
 
 The scheduler uses the priority field to search for the next unit of work to perform. This algorithm will be discussed in a future section.
+调度程序使用优先级字段来搜索要执行的下一个 work unit。该算法将在以后的部分中讨论。
 
 #### `alternate`
 
-<dl>
-  <dt>flush</dt>
-  <dd>To flush a fiber is to render its output onto the screen.</dd>
+- flush：flush fiber 是将其输出渲染到屏幕上。
+- work-in-progress：未完成的 fiber，即未返回的堆栈帧。
 
-  <dt>work-in-progress</dt>
-  <dd>A fiber that has not yet completed; conceptually, a stack frame which has not yet returned.</dd>
-</dl>
+任何时候，一个组件实例最多具有两个与其对应的 fiber：flush fiber 和 work-in-progress。
 
-At any time, a component instance has at most two fibers that correspond to it: the current, flushed fiber, and the work-in-progress fiber.
+当前 fiber 的替代者是 work-in-progress，而 work-in-progres 的替代者是当前 fiber。
 
-The alternate of the current fiber is the work-in-progress, and the alternate of the work-in-progress is the current fiber.
+fiber 的替代者是使用名为`cloneFiber`的函数延迟创建的。并非总是创建一个新的对象，`cloneFiber`会尝试重用 fiber 的替代对象（如果存在），从而最大程度地减少分配。
 
-A fiber's alternate is created lazily using a function called `cloneFiber`. Rather than always creating a new object, `cloneFiber` will attempt to reuse the fiber's alternate if it exists, minimizing allocations.
-
-You should think of the `alternate` field as an implementation detail, but it pops up often enough in the codebase that it's valuable to discuss it here.
+您应该将`alternate`字段视为实现细节，它经常在代码库中弹出，因此在此处进行讨论很有价值。
 
 #### `output`
 
-<dl>
-  <dt>host component</dt>
-  <dd>The leaf nodes of a React application. They are specific to the rendering environment (e.g., in a browser app, they are `div`, `span`, etc.). In JSX, they are denoted using lowercase tag names.</dd>
-</dl>
+**宿主元素**
 
-Conceptually, the output of a fiber is the return value of a function.
+React 应用程序的叶子节点。它们特定于渲染环境（例如，在浏览器应用中，它们是`div`，`span`等）。在JSX中，它们使用小写标记名称表示
 
-Every fiber eventually has output, but output is created only at the leaf nodes by **host components**. The output is then transferred up the tree.
+一般 fiber 的输出是函数的返回值。每个 fiber 最终都有输出，但是输出仅由**宿主元素**在叶节点上创建。然后将输出传输到树上。
 
-The output is what is eventually given to the renderer so that it can flush the changes to the rendering environment. It's the renderer's responsibility to define how the output is created and updated.
+输出是最终提供给渲染器的，以便可以将更改刷新到渲染环境。渲染器的责任是定义输出的创建和更新方式。
 
-## Future sections
+## 未来部分
 
-That's all there is for now, but this document is nowhere near complete. Future sections will describe the algorithms used throughout the lifecycle of an update. Topics to cover include:
+目前为止，本文档还远远不够完整。以后的部分将描述在更新的整个生命周期中使用的算法。涵盖的主题包括：
 
-- how the scheduler finds the next unit of work to perform.
-- how priority is tracked and propagated through the fiber tree.
-- how the scheduler knows when to pause and resume work.
-- how work is flushed and marked as complete.
-- how side-effects (such as lifecycle methods) work.
-- what a coroutine is and how it can be used to implement features like context and layout.
+- 调度程序如何找到下一个要执行的工作单元。
+- 如何通过 fiber 树跟踪和传播优先级。
+- 调度程序如何知道何时暂停和继续工作。
+- 如何刷新 work 并将其标记为完成。
+- 副作用（例如生命周期方法）如何起作用。
+- 协程是什么，以及如何将其用于实现上下文和布局等功能。
 
-## Related Videos
+## 相关影片
 - [What's Next for React (ReactNext 2016)](https://youtu.be/aV1271hd9ew)
