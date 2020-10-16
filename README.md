@@ -1,79 +1,77 @@
 # React Fiber Architecture
 
-## Introduction
+## 介绍
 
-React Fiber is an ongoing reimplementation of React's core algorithm. It is the culmination of over two years of research by the React team.
+React Fiber 是 React 核心算法的一个正在进行的再实现。这是React团队两年多研究的成果。
 
-The goal of React Fiber is to increase its suitability for areas like animation, layout, and gestures. Its headline feature is **incremental rendering**: the ability to split rendering work into chunks and spread it out over multiple frames.
+React Fiber的目标是增加 React 对动画、布局和手势等领域的适应性。它的主要特性是**增量渲染**:能够将渲染工作分割成块，并将其分散到多个帧上。
 
-Other key features include the ability to pause, abort, or reuse work as new updates come in; the ability to assign priority to different types of updates; and new concurrency primitives.
+其他关键特性包括在新的更新到来时暂停、中止或重用工作的能力;能够分配优先级的不同类型的更新;和新的并发原语（concurrency primitives）。
 
-### About this document
+### 关于此文档
 
-Fiber introduces several novel concepts that are difficult to grok solely by looking at code. This document began as a collection of notes I took as I followed along with Fiber's implementation in the React project. As it grew, I realized it may be a helpful resource for others, too.
+Fiber 引入了几个新的概念，仅通过查看代码是很难理解的。这个文档是我在React项目中执行Fiber时所做的笔记的集合。随着它的成长，我意识到它对其他人也可能是一个有用的资源。
 
-I'll attempt to use the plainest language possible, and to avoid jargon by explicitly defining key terms. I'll also link heavily to external resources when possible.
+我将尝试使用最简单的语言，并通过使用简要说明来避免术语。如果可能的话，我还会与外部资源紧密联系。
 
-Please note that I am not on the React team, and do not speak from any authority. **This is not an official document**. I have asked members of the React team to review it for accuracy.
+请注意，我不是 React 小组的成员，也不代表任何权威。这不是官方文件。我已经要求React团队的成员对其进行审核，以确保准确性。
 
-This is also a work in progress. **Fiber is an ongoing project that will likely undergo significant refactors before it's completed.** Also ongoing are my attempts at documenting its design here. Improvements and suggestions are highly welcome.
+这也是一项正在进行的工作。**Fiber 是一个正在进行的项目，在完成之前可能会经历重大的重构。**还在进行的是我在这里记录其设计的尝试。我们非常欢迎改进和建议。
 
-My goal is that after reading this document, you will understand Fiber well enough to [follow along as it's implemented](https://github.com/facebook/react/commits/master/src/renderers/shared/fiber), and eventually even be able to contribute back to React.
+我的目标是，在阅读完本文后，您将充分理解 Fiber (https://github.com/facebook/react/commits/master/src/renderers/shared/fiber)，并最终能够反馈给 React 。
 
-### Prerequisites
+### 预备知识
 
-I strongly suggest that you are familiar with the following resources before continuing:
+在理解 Fiber 之前，强烈建议掌握下面概念：
 
-- [React Components, Elements, and Instances](https://facebook.github.io/react/blog/2015/12/18/react-components-elements-and-instances.html) - "Component" is often an overloaded term. A firm grasp of these terms is crucial.
-- [Reconciliation](https://facebook.github.io/react/docs/reconciliation.html) - A high-level description of React's reconciliation algorithm.
-- [React Basic Theoretical Concepts](https://github.com/reactjs/react-basic) - A description of the conceptual model of React without implementation burden. Some of this may not make sense on first reading. That's okay, it will make more sense with time.
-- [React Design Principles](https://facebook.github.io/react/contributing/design-principles.html) - Pay special attention to the section on scheduling. It does a great job of explaining the *why* of React Fiber.
+- 增量渲染：将渲染工作分成多个块并将其分布到多个帧中的能力。
+- [React 组件、元素和实例](https://zh-hans.reactjs.org/blog/2015/12/18/react-components-elements-and-instances.html)
+- [协调](https://zh-hans.reactjs.org/docs/reconciliation.html)
+- [React 基础理念](https://github.com/reactjs/react-basic)
+- [React 设计原则](https://zh-hans.reactjs.org/docs/design-principles.html)，特别注意调度部分，它很好的解释了 React Fiber 产生的原因
 
-## Review
-
-Please check out the prerequisites section if you haven't already.
-
-Before we dive into the new stuff, let's review a few concepts.
-
-### What is reconciliation?
+### 什么是 reconciliation?
 
 <dl>
   <dt>reconciliation</dt>
-  <dd>The algorithm React uses to diff one tree with another to determine which parts need to be changed.</dd>
+  <dd>该算法利用对比两个树之间的不同来确定哪些部分需要更改</dd>
 
   <dt>update</dt>
-  <dd>A change in the data used to render a React app. Usually the result of `setState`. Eventually results in a re-render.</dd>
+  <dd>用于呈现 React 应用程序的数据变化。通常是“setState”导致最终的重新渲染。</dd>
 </dl>
 
-The central idea of React's API is to think of updates as if they cause the entire app to re-render. This allows the developer to reason declaratively, rather than worry about how to efficiently transition the app from any particular state to another (A to B, B to C, C to A, and so on).
+React API的核心思想是，认为是更新导致的整个应用程序重新渲染。这允许开发人员声明式地推理，而不用担心如何有效地将应用程序从任何特定状态转换到另一种状态(A到B, B到C, C到A，等等)。
 
-Actually re-rendering the entire app on each change only works for the most trivial apps; in a real-world app, it's prohibitively costly in terms of performance. React has optimizations which create the appearance of whole app re-rendering while maintaining great performance. The bulk of these optimizations are part of a process called **reconciliation**.
+实际上，在每次更改时重新呈现整个应用程序只适用于小的应用程序;在一个真实的应用程序中，它的性能代价非常高。React进行了优化，在保持良好性能的同时创建了整个应用程序重新呈现的样子。这些优化的大部分是一个称为**协调（reconciliation）**的过程的一部分。
 
-Reconciliation is the algorithm behind what is popularly understood as the "virtual DOM." A high-level description goes something like this: when you render a React application, a tree of nodes that describes the app is generated and saved in memory. This tree is then flushed to the rendering environment — for example, in the case of a browser application, it's translated to a set of DOM operations. When the app is updated (usually via `setState`), a new tree is generated. The new tree is diffed with the previous tree to compute which operations are needed to update the rendered app.
 
-Although Fiber is a ground-up rewrite of the reconciler, the high-level algorithm [described in the React docs](https://facebook.github.io/react/docs/reconciliation.html) will be largely the same. The key points are:
+协调（Reconciliation） 是人们普遍理解的“虚拟DOM”背后的算法。高级描述大致是这样的:当您呈现一个React应用程序时，将生成描述该应用程序的节点树并保存在内存中。然后，这个树被刷新到渲染环境中——例如，对于浏览器应用程序，它被转换为一组DOM操作。当应用程序被更新时(通常通过' setState ')，一个新的树被生成。新的树与之前的树不同，可以计算需要哪些操作来更新呈现的应用程序。
 
-- Different component types are assumed to generate substantially different trees. React will not attempt to diff them, but rather replace the old tree completely.
-- Diffing of lists is performed using keys. Keys should be "stable, predictable, and unique."
+尽管 Fiber 是对 reconciler 的重写，但高级算法[在React文档中描述](https://facebook.github.io/react/docs/reconciliation.html)将基本相同。重点是:
+
+- 假设不同的组件类型会生成完全不同的树。React不会试图去区别它们，而是完全取代老树
+- 列表的不同是使用 key 来执行的。key 应该是“稳定的、可预测且唯一的”。
+
 
 ### Reconciliation versus rendering
 
-The DOM is just one of the rendering environments React can render to, the other major targets being native iOS and Android views via React Native. (This is why "virtual DOM" is a bit of a misnomer.)
+DOM 只是 React 可以渲染的环境之一，其他主要目标是通过 React native 实现的本地 iOS 和 Android 视图。(这就是为什么“虚拟DOM”有点用词不当的原因。)
 
-The reason it can support so many targets is because React is designed so that reconciliation and rendering are separate phases. The reconciler does the work of computing which parts of a tree have changed; the renderer then uses that information to actually update the rendered app.
+它能够支持这么多目标的原因是因为 React 被设计成协调和渲染是分开的阶段。“协调器”负责计算树的哪些部分发生了变化;然后，渲染器使用这些信息来实际更新渲染的应用程序。
 
-This separation means that React DOM and React Native can use their own renderers while sharing the same reconciler, provided by React core.
+这种分离意味着 React DOM 和 React Native 可以使用它们自己的渲染器，同时共享 React core 提供的相同协调器。
 
-Fiber reimplements the reconciler. It is not principally concerned with rendering, though renderers will need to change to support (and take advantage of) the new architecture.
+Fiber 重新实现了协调。它主要与渲染无关，尽管渲染器需要进行更改以支持(并利用)新的体系结构。
 
 ### Scheduling
 
 <dl>
   <dt>scheduling</dt>
-  <dd>the process of determining when work should be performed.</dd>
+  <dd>决定何时执行 work 的过程。</dd>
 
   <dt>work</dt>
-  <dd>any computations that must be performed. Work is usually the result of an update (e.g. <code>setState</code>).
+  <dd>必须执行的计算。Work 通常是更新的结果(例如<code>setState)(e.g. <code>setState</code>).
+  
 </dl>
 
 React's [Design Principles](https://facebook.github.io/react/contributing/design-principles.html#scheduling) document is so good on this subject that I'll just quote it here:
@@ -98,72 +96,70 @@ React doesn't currently take advantage of scheduling in a significant way; an up
 
 Now we're ready to dive into Fiber's implementation. The next section is more technical than what we've discussed so far. Please make sure you're comfortable with the previous material before moving on.
 
-## What is a fiber?
+## 什么是 fiber?
 
-We're about to discuss the heart of React Fiber's architecture. Fibers are a much lower-level abstraction than application developers typically think about. If you find yourself frustrated in your attempts to understand it, don't feel discouraged. Keep trying and it will eventually make sense. (When you do finally get it, please suggest how to improve this section.)
+我们将讨论React Fiber 的核心架构。Fiber 是一种比应用程序开发人员通常认为的低得多的抽象。如果你发现自己在试图理解它的过程中受挫，不要感到气馁。继续尝试，最终会有意义的。(当你最终明白了，请建议如何改进这部分。)
 
-Here we go!
+我们开始吧！
 
 ---
+我们已经确定，Fiber 的一个主要目标是使 React 能够利用调度优势。具体来说，我们需要能够：
 
-We've established that a primary goal of Fiber is to enable React to take advantage of scheduling. Specifically, we need to be able to
+- 暂停 Work，稍后再返回。
+- 为不同类型的 work 分配优先级。
+- 重复使用以前完成的 work。
+- 如果不再需要，则停止 work。
 
-- pause work and come back to it later.
-- assign priority to different types of work.
-- reuse previously completed work.
-- abort work if it's no longer needed.
 
-In order to do any of this, we first need a way to break work down into units. In one sense, that's what a fiber is. A fiber represents a **unit of work**.
+为了做到这一点，我们首先需要一种将 work 分解成单元的方法。在某种意义上，这就是 Fiber。一个 Fiber 表示一个**工作单元**。
 
-To go further, let's go back to the conception of [React components as functions of data](https://github.com/reactjs/react-basic#transformation), commonly expressed as
+更进一步，让我们回到[React 组件作为数据的函数]的概念(React components as functions of data](https://github.com/reactjs/react-basic#transformation)，通常表示为
 
 ```
 v = f(d)
 ```
+因此，渲染 React 应用程序类似于调用一个函数，该函数的主体包含对其他函数的调用，等等。在考虑 Fiber时，这个类比很有用.
 
-It follows that rendering a React app is akin to calling a function whose body contains calls to other functions, and so on. This analogy is useful when thinking about fibers.
+计算机跟踪程序执行的典型方式是使用[调用堆栈](https://en.wikipedia.org/wiki/Call_stack)。当一个函数被执行时，一个新的**堆栈帧**被添加到堆栈中。该堆栈帧表示由该函数执行的 work。
 
-The way computers typically track a program's execution is using the [call stack](https://en.wikipedia.org/wiki/Call_stack). When a function is executed, a new **stack frame** is added to the stack. That stack frame represents the work that is performed by that function.
+在处理 UI 时，如果一次执行了太多 work，可能会导致动画帧卡顿。另外，一些 work 可能是不必要的，但它会被最先执行。这就是UI组件和函数之间的比较的失败之处，因为组件比一般函数有更具体的关注点。
 
-When dealing with UIs, the problem is that if too much work is executed all at once, it can cause animations to drop frames and look choppy. What's more, some of that work may be unnecessary if it's superseded by a more recent update. This is where the comparison between UI components and function breaks down, because components have more specific concerns than functions in general.
+新的浏览器(和React Native)实现了帮助解决这个问题的api: `requestIdleCallback` 调度一个低优先级函数在空闲期间被调用，而`requestAnimationFrame`调度一个高优先级函数在下一个动画帧被调用。问题是，为了使用这些api，您需要一种将 render work 分解为增量单元的方法。如果您只依赖于调用堆栈，它也将继续工作，直到堆栈为空。
 
-Newer browsers (and React Native) implement APIs that help address this exact problem: `requestIdleCallback` schedules a low priority function to be called during an idle period, and `requestAnimationFrame` schedules a high priority function to be called on the next animation frame. The problem is that, in order to use those APIs, you need a way to break rendering work into incremental units. If you rely only on the call stack, it will keep doing work until the stack is empty.
+如果我们可以自定义调用堆栈的行为来优化ui的呈现，并且我们可以随意中断并手动操作堆栈帧，岂不是更好？
 
-Wouldn't it be great if we could customize the behavior of the call stack to optimize for rendering UIs? Wouldn't it be great if we could interrupt the call stack at will and manipulate stack frames manually?
+这就是 React Fiber 的作用。Fiber 是堆栈的重新实现，专门用于 React 组件。您可以将单个 fiber 看作一个**虚拟堆栈帧**。
 
-That's the purpose of React Fiber. Fiber is reimplementation of the stack, specialized for React components. You can think of a single fiber as a **virtual stack frame**.
+重新实现堆栈的好处是，您可以[在内存中保存堆栈帧](https://www.facebook.com/groups/2003630259862046/permalink/2054053404819731/)并根据需要执行它们(*无论何时*)。这对于完成我们的调度目标是至关重要的。
 
-The advantage of reimplementing the stack is that you can [keep stack frames in memory](https://www.facebook.com/groups/2003630259862046/permalink/2054053404819731/) and execute them however (and *whenever*) you want. This is crucial for accomplishing the goals we have for scheduling.
+除了调度之外，手动处理堆栈帧可以开启并发和错误边界等潜在特性。我们将在以后的章节中讨论这些主题。
 
-Aside from scheduling, manually dealing with stack frames unlocks the potential for features such as concurrency and error boundaries. We will cover these topics in future sections.
+在下一节中，我们将进一步了解 Fiber 的结构。
 
-In the next section, we'll look more at the structure of a fiber.
+### Fiber 的结构
 
-### Structure of a fiber
+*注:随着我们对实现细节的了解越来越详细，一些事情会发生变化的可能性也会增加。如发现任何错误或资料已过时，请提交申请*
 
-*Note: as we get more specific about implementation details, the likelihood that something may change increases. Please file a PR if you notice any mistakes or outdated information.*
+具体地说，光纤是一个JavaScript对象，它包含关于组件、输入和输出的信息。
 
-In concrete terms, a fiber is a JavaScript object that contains information about a component, its input, and its output.
+光纤对应于堆栈帧，它也对应组件的实例。
 
-A fiber corresponds to a stack frame, but it also corresponds to an instance of a component.
-
-Here are some of the important fields that belong to a fiber. (This list is not exhaustive.)
+以下是一些属于 fiber 的重要字段。(这个列表并不详尽。)
 
 #### `type` and `key`
 
-The type and key of a fiber serve the same purpose as they do for React elements. (In fact, when a fiber is created from an element, these two fields are copied over directly.)
+fiber 的 type 和 key 与 React 元素（elements）的作用是一样的。(实际上，当从一个元素创建一个fiber时，这两个字段会被直接复制。)
+fiber 的 type 描述了它所对应的组件。对于复合组件，type 是函数或类组件本身。对于宿主元素(' div '， ' span '等)，type 是一个字符串。
 
-The type of a fiber describes the component that it corresponds to. For composite components, the type is the function or class component itself. For host components (`div`, `span`, etc.), the type is a string.
+从概念上讲，type 是堆栈帧跟踪其执行的函数(如' v = f(d) ')。
 
-Conceptually, the type is the function (as in `v = f(d)`) whose execution is being tracked by the stack frame.
-
-Along with the type, the key is used during reconciliation to determine whether the fiber can be reused.
+key 是在协调期间使用，以确定 fiber 是否可以重复使用。
 
 #### `child` and `sibling`
 
-These fields point to other fibers, describing the recursive tree structure of a fiber.
+这些字段指向其他 fiber，描述 fiber 的递归树结构。
 
-The child fiber corresponds to the value returned by a component's `render` method. So in the following example
+child fiber 对应于组件的`render`方法返回的值。在下面的例子中
 
 ```js
 function Parent() {
@@ -171,25 +167,25 @@ function Parent() {
 }
 ```
 
-The child fiber of `Parent` corresponds to `Child`.
+`Parent`的 child fiber 对应 `Child`。
 
-The sibling field accounts for the case where `render` returns multiple children (a new feature in Fiber!):
+sibling 字段说明`render`返回多个子项的情况（Fiber中的一项新功能！）：
 
 ```js
 function Parent() {
   return [<Child1 />, <Child2 />]
 }
 ```
-
-The child fibers form a singly-linked list whose head is the first child. So in this example, the child of `Parent` is `Child1` and the sibling of `Child1` is `Child2`.
-
-Going back to our function analogy, you can think of a child fiber as a [tail-called function](https://en.wikipedia.org/wiki/Tail_call).
+child fiber 形成一个单链列表，其头是第一个子链。因此，在此示例中，`Parent`的子级为`Child1`，而`Child1`的兄弟级为`Child2`。
+回到我们的功能类比，您可以将 child fiber 视为[tail-called function](https://en.wikipedia.org/wiki/Tail_call)。
 
 #### `return`
 
-The return fiber is the fiber to which the program should return after processing the current one. It is conceptually the same as the return address of a stack frame. It can also be thought of as the parent fiber.
+return fiber 是程序在处理完当前 fiber 之后应返回的 fiber。从概念上讲，它与堆栈帧的返回地址相同。也可以将其视为 parent fiber。
 
 If a fiber has multiple child fibers, each child fiber's return fiber is the parent. So in our example in the previous section, the return fiber of `Child1` and `Child2` is `Parent`.
+
+如果 fiber 具有多个 child fiber，则每个 child fiber 的 return fiber 都是 parent fiber。因此，在上一节的示例中，`Child1`和`Child2`的 return fiber 为`Parent`。
 
 #### `pendingProps` and `memoizedProps`
 
